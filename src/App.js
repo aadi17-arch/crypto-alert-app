@@ -1,343 +1,222 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
-import { BsCurrencyBitcoin } from 'react-icons/bs';
+import React, { useState } from 'react';
 import Header from './components/Header';
 import CryptoList from './components/CryptoList';
-import PriceAlerts from './components/PriceAlerts';
 import Toast from './components/Toast';
-import {
-  signInWithGoogle,
-  signOutUser,
-  addAlertToFirestore,
-  deleteAlertFromFirestore,
-  updateAlertStatus,
-  subscribeToUserAlerts,
-  listenToAuthState
-} from './firebase';
+import { useAuth } from './contexts/AuthContext';
+import { AlertProvider, useAlerts } from './contexts/AlertContext';
+import { useCryptoPrices } from './hooks/useCryptoPrices';
+import { ALERT_CONDITIONS } from './utils/constants';
 import './App.css';
 
-const POLL_INTERVAL_MS = 60000;
-const RETRY_DELAYS_MS = [1500, 4000];
-
-function App() {
-  const [user, setUser] = useState(null);
-  const [cryptos, setCryptos] = useState([]);
-  const [userAlerts, setUserAlerts] = useState([]);
-  const [currentPrices, setCurrentPrices] = useState({});
+function MainApp() {
+  const { user, signInWithGoogle, logout } = useAuth();
+  const { cryptos, loading } = useCryptoPrices();
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [npTab, setNpTab] = useState('notifications');
+  const [showProfile, setShowProfile] = useState(false);
   const [selectedCrypto, setSelectedCrypto] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [alertTarget, setAlertTarget] = useState('');
+  const [alertCondition, setAlertCondition] = useState(ALERT_CONDITIONS.ABOVE);
   const [toast, setToast] = useState(null);
-  const [cryptoError, setCryptoError] = useState(null);
 
-  useEffect(() => {
-    const unsubscribe = listenToAuthState((currentUser) => {
-      setUser(currentUser);
-      setAuthChecked(true);
-
-      if (!currentUser) {
-        setUserAlerts([]);
-        setSelectedCrypto(null);
-      }
-    });
-
-    return unsubscribe;
-  }, []);
-
-  const fetchCryptos = useCallback(async (showRetryToast = false) => {
-    const endpoint =
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50';
-
-    setLoading(true);
-    setCryptoError(null);
-
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
-      try {
-        const response = await axios.get(endpoint, {
-          timeout: 10000
-        });
-
-        const cryptoList = response.data.map((coin) => ({
-          ...coin,
-          cryptoId: coin.id,
-          cryptoName: coin.name
-        }));
-
-        const priceMap = cryptoList.reduce((acc, coin) => {
-          acc[coin.id] = coin.current_price;
-          return acc;
-        }, {});
-
-        setCryptos(cryptoList);
-        setCurrentPrices(priceMap);
-        setLoading(false);
-
-        if (showRetryToast) {
-          setToast({ message: 'Crypto prices refreshed', type: 'success' });
-        }
-
-        return;
-      } catch (error) {
-        const statusCode = error.response?.status;
-        const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
-
-        console.error('Failed to fetch crypto prices:', error);
-
-        if (!isLastAttempt) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, RETRY_DELAYS_MS[attempt]);
-          });
-          continue;
-        }
-
-        if (cryptos.length > 0) {
-          setToast({
-            message:
-              statusCode === 429
-                ? 'Rate limited by CoinGecko. Showing last updated prices.'
-                : 'Refresh failed. Showing last updated prices.',
-            type: 'info'
-          });
-          setLoading(false);
-          return;
-        }
-
-        setCryptoError(
-          statusCode === 429
-            ? 'CoinGecko rate limit reached. Please wait a moment and try again.'
-            : 'Failed to load cryptocurrency data. Please check your connection and try again.'
-        );
-        setLoading(false);
-      }
-    }
-  }, [cryptos.length]);
-
-  // Fetch the top 50 crypto prices every 60 seconds and keep both list and lookup data in sync.
-  useEffect(() => {
-    fetchCryptos();
-    const interval = setInterval(fetchCryptos, POLL_INTERVAL_MS);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [fetchCryptos]);
-
-  // Subscribe to the logged-in user's alerts so Firestore changes appear in real time.
-  useEffect(() => {
-    if (!user) {
-      return undefined;
-    }
-
-    const unsubscribe = subscribeToUserAlerts(user.uid, (alerts) => {
-      setUserAlerts(alerts);
-    });
-
-    return unsubscribe;
-  }, [user]);
-
-  // Check active alerts against current prices and mark them triggered when a condition is met.
-  useEffect(() => {
-    if (!user || userAlerts.length === 0) {
-      return;
-    }
-
-    userAlerts.forEach((alert) => {
-      const alertKey = alert.cryptoId || alert.coinId;
-      const currentPrice = currentPrices[alertKey];
-      const alertCondition = String(alert.condition || '').toLowerCase();
-      const targetPrice = Number(alert.targetPrice);
-
-      if (currentPrice == null || Number.isNaN(targetPrice) || alert.status === 'triggered') {
-        return;
-      }
-
-      const isAboveTriggered = alertCondition === 'above' && currentPrice > targetPrice;
-      const isBelowTriggered = alertCondition === 'below' && currentPrice < targetPrice;
-
-      if (isAboveTriggered || isBelowTriggered) {
-        updateAlertStatus(alert.id, 'triggered').catch((error) => {
-          console.error('Failed to update alert status:', error);
-        });
-
-        setToast({
-          message: `${alert.cryptoName || alert.coinName} alert triggered!`,
-          type: 'info'
-        });
-      }
-    });
-  }, [currentPrices, userAlerts, user]);
+  const { activeAlerts, historyAlerts, createAlert, dismissAlert } = useAlerts();
 
   const handleLogin = async () => {
-    setIsAuthLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (e) {
+      setToast({ message: 'Authentication failed', type: 'error' });
+    }
+  };
+
+  const handleSelectCrypto = (coin) => {
+    setSelectedCrypto(coin);
+    setAlertTarget(coin.current_price.toString());
+  };
+
+  const handleSetQuickAlert = async () => {
+    if (!user) return setToast({ message: 'Sign in required', type: 'error' });
+    if (!selectedCrypto || !alertTarget) return;
 
     try {
-      const loggedInUser = await signInWithGoogle();
-      setUser(loggedInUser);
-    } catch (error) {
-      console.error('Login failed:', error);
-      setToast({
-        message: error.message || 'Login failed',
-        type: 'error'
+      await createAlert({
+        cryptoId: selectedCrypto.id,
+        cryptoName: selectedCrypto.name,
+        targetPrice: Number(alertTarget),
+        condition: alertCondition
       });
-    }
-
-    setIsAuthLoading(false);
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOutUser();
-      setUser(null);
-      setUserAlerts([]);
-      setSelectedCrypto(null);
-    } catch (error) {
-      console.error('Logout failed:', error);
-      setToast({ message: 'Logout failed', type: 'error' });
+      setToast({ message: 'Alert established', type: 'success' });
+    } catch (e) {
+      setToast({ message: 'Failed to set alert', type: 'error' });
     }
   };
 
-  const handleAddAlert = async (formData) => {
-    if (!user) {
-      setToast({ message: 'Please sign in first', type: 'error' });
-      return;
-    }
-
-    const selectedId = formData.cryptoId || formData.coinId;
-    const selectedCoin = cryptos.find((coin) => coin.id === selectedId);
-    const normalizedCondition =
-      String(formData.condition || '').toLowerCase() === 'below' ? 'below' : 'above';
-
-    const alertPayload = {
-      cryptoId: selectedId,
-      cryptoName: formData.cryptoName || selectedCoin?.name || '',
-      targetPrice: Number(formData.targetPrice),
-      condition: normalizedCondition
-    };
-
-    try {
-      await addAlertToFirestore(user.uid, alertPayload);
-      setToast({ message: 'Alert created!', type: 'success' });
-    } catch (error) {
-      console.error('Failed to create alert:', error);
-      setToast({ message: 'Failed to create alert', type: 'error' });
-    }
-  };
-
-  const handleDeleteAlert = async (alertId) => {
-    try {
-      await deleteAlertFromFirestore(alertId);
-      setToast({ message: 'Alert deleted', type: 'success' });
-    } catch (error) {
-      console.error('Failed to delete alert:', error);
-      setToast({ message: 'Failed to delete alert', type: 'error' });
-    }
-  };
-
-  const handleSelectCrypto = (crypto) => {
-    setSelectedCrypto(crypto);
-    setToast({
-      message: `${crypto.coinName} selected for a new alert`,
-      type: 'info'
-    });
-  };
-
-  if (!authChecked) {
-    return (
-      <div className="app-shell">
-        <Header
-          user={user}
-          onLogin={handleLogin}
-          onLogout={handleLogout}
-          isLoading={isAuthLoading}
-        />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="app-shell">
-        <Header
-          user={user}
-          onLogin={handleLogin}
-          onLogout={handleLogout}
-          isLoading={isAuthLoading}
-        />
-        <div className="login-page">
-          <div className="login-card">
-            <div className="login-logo">
-              <BsCurrencyBitcoin size={34} />
-            </div>
-            <h1 className="login-title">CryptoAlert</h1>
-            <p className="login-subtitle">
-              Sign in to create alerts, sync them across devices, and stay on top of live crypto prices.
-            </p>
-            <button
-              className="btn-google-signin"
-              onClick={handleLogin}
-              disabled={isAuthLoading}
-              id="google-signin-btn"
-            >
-              {isAuthLoading ? 'Signing in...' : 'Continue with Google'}
-            </button>
-          </div>
-        </div>
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onClose={() => setToast(null)}
-          />
-        )}
-      </div>
-    );
-  }
+  const totalNotificationCount = activeAlerts.length + historyAlerts.length;
 
   return (
     <div className="app-shell">
-      <Header
-        user={user}
-        onLogin={handleLogin}
-        onLogout={handleLogout}
-        isLoading={isAuthLoading}
+      <div className="scanline"></div>
+      <Header 
+        user={user} 
+        onLogin={handleLogin} 
+        onLogout={logout} 
+        onToggleNotifications={() => { setShowNotifications(!showNotifications); setShowProfile(false); }}
+        onToggleProfile={() => { setShowProfile(!showProfile); setShowNotifications(false); }}
+        notificationCount={totalNotificationCount}
       />
+      
+      {showNotifications && (
+        <>
+          <div className="np-backdrop" onClick={() => setShowNotifications(false)}></div>
+          <div className="notification-panel">
+            <div className="np-header-tabs">
+              <button 
+                className={`np-tab-btn ${npTab === 'notifications' ? 'active' : ''}`}
+                onClick={() => setNpTab('notifications')}
+              >
+                History ({historyAlerts.length})
+              </button>
+              <button 
+                className={`np-tab-btn ${npTab === 'monitors' ? 'active' : ''}`}
+                onClick={() => setNpTab('monitors')}
+              >
+                Active ({activeAlerts.length})
+              </button>
+              <button className="np-close-btn-minimal" onClick={() => setShowNotifications(false)}>x</button>
+            </div>
+            <div className="np-body">
+              {npTab === 'notifications' ? (
+                historyAlerts.length > 0 ? (
+                  historyAlerts.map(alert => (
+                    <div key={alert.id} className="np-item">
+                      <div className="np-item-info">
+                        <strong>{alert.cryptoName}</strong>
+                        <span>Triggered at ${alert.targetPrice}</span>
+                      </div>
+                      <button className="np-item-clear" onClick={() => dismissAlert(alert.id)}>Dismiss</button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="np-empty">No trigger history found</div>
+                )
+              ) : (
+                activeAlerts.length > 0 ? (
+                  activeAlerts.map(alert => (
+                    <div key={alert.id} className="np-item">
+                      <div className="np-item-info">
+                        <strong>{alert.cryptoName}</strong>
+                        <span style={{ color: 'var(--accent-yellow)' }}>{alert.condition.toUpperCase()} ${alert.targetPrice}</span>
+                      </div>
+                      <button className="np-item-clear" onClick={() => dismissAlert(alert.id)}>Cancel</button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="np-empty">No active monitors established</div>
+                )
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
-      <div className="app-main">
-        <div className="crypto-section">
-          <CryptoList
-            cryptos={cryptos}
-            currentPrices={currentPrices}
-            loading={loading}
-            error={cryptoError}
-            onSelectCrypto={handleSelectCrypto}
-            onRefresh={() => {
-              fetchCryptos(true);
-            }}
-          />
-        </div>
+      {showProfile && user && (
+        <>
+          <div className="np-backdrop" onClick={() => setShowProfile(false)}></div>
+          <div className="profile-panel">
+            <div className="pp-header">
+              <span className="pp-title">User Profile</span>
+              <button className="np-close-btn" onClick={() => setShowProfile(false)}>&times;</button>
+            </div>
+            <div className="pp-body">
+              <div className="pp-user-info">
+                <img src={user.photoURL} alt="Avatar" className="pp-avatar" />
+                <div className="pp-details">
+                  <span className="pp-name">{user.displayName}</span>
+                  <span className="pp-email">{user.email}</span>
+                </div>
+              </div>
+              <div className="pp-stats">
+                <div className="pp-stat-item">
+                  <span className="pp-stat-label">Total Monitors</span>
+                  <span className="pp-stat-value">{activeAlerts.length + historyAlerts.length}</span>
+                </div>
+                <div className="pp-stat-item">
+                  <span className="pp-stat-label">Security Tier</span>
+                  <span className="pp-stat-value" style={{ color: 'var(--accent-yellow)' }}>Console Alpha</span>
+                </div>
+              </div>
 
-        {user && (
-          <div className="alerts-section">
-            <PriceAlerts
-              cryptoList={cryptos}
-              userAlerts={userAlerts}
-              selectedCrypto={selectedCrypto}
-              onAddAlert={handleAddAlert}
-              onDeleteAlert={handleDeleteAlert}
-            />
+              <button className="btn-pp-logout" onClick={() => { logout(); setShowProfile(false); }}>
+                Logout
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      
+      <main className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: '100px' }}>
+        <CryptoList 
+          cryptos={cryptos} 
+          loading={loading} 
+          onSelectCrypto={handleSelectCrypto} 
+        />
+      </main>
+
+      <div className="quick-alert-bar">
+        {selectedCrypto ? (
+          <div className="alert-config">
+            <span>Set Alert &rarr;</span>
+            <div className="config-item">
+              Coin <span className="alert-val">{selectedCrypto.symbol.toUpperCase()}</span>
+            </div>
+            <div className="config-item">
+              Target 
+              <input 
+                className="console-input"
+                style={{ width: '100px' }}
+                value={alertTarget}
+                onChange={(e) => setAlertTarget(e.target.value)}
+              />
+            </div>
+            <div className="config-item">
+              Condition 
+              <select 
+                className="console-select"
+                value={alertCondition}
+                onChange={(e) => setAlertCondition(e.target.value)}
+              >
+                <option value={ALERT_CONDITIONS.ABOVE}>Above</option>
+                <option value={ALERT_CONDITIONS.BELOW}>Below</option>
+              </select>
+            </div>
+          </div>
+        ) : (
+          <div className="alert-config" style={{ opacity: 0.5 }}>
+            <span>Set Alert &rarr;</span>
+            <div className="config-item">Select an asset from the list to set an alert</div>
           </div>
         )}
+        <button 
+          className="btn-set-alert" 
+          onClick={handleSetQuickAlert}
+          disabled={!selectedCrypto}
+        >
+          {selectedCrypto ? 'Set Alert' : 'Pending...'}
+        </button>
       </div>
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
+  );
+}
+
+function App() {
+  const { currentPrices } = useCryptoPrices();
+  
+  return (
+    <AlertProvider currentPrices={currentPrices}>
+      <MainApp />
+    </AlertProvider>
   );
 }
 

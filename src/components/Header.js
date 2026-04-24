@@ -1,43 +1,43 @@
-import React from "react";
-import { BsCurrencyBitcoin } from "react-icons/bs";
+import React from 'react';
+import { BsBellFill } from 'react-icons/bs';
 
-function Header({ user, onLogin, onLogout, isLoading }) {
+const Header = ({ user, onLogin, onLogout, isLoading, onToggleNotifications, onToggleProfile, notificationCount }) => {
   return (
-    <header className="app-header">
-      <div className="app-header__brand">
-        <div className="app-header__icon">
-          <BsCurrencyBitcoin size={24} />
+    <header className="console-header">
+      <div className="header-left">
+        <div className="console-brand">
+          CRYPTOALERT
         </div>
-        <div className="app-header__copy">
-          <h1>CryptoAlert</h1>
-          <p>Track markets and manage price alerts</p>
+        <div className="status-live">
+          <div className="status-dot"></div>
+          <span className="flicker-text">LIVE</span>
         </div>
       </div>
-
-      <div className="app-header__actions">
-        {!user && !isLoading && (
-          <button type="button" onClick={onLogin} className="app-header__login">
-            Sign in with Google
-          </button>
+      <div className="header-actions" style={{ marginLeft: 'auto', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+        {user && (
+          <div className="notification-bell" onClick={onToggleNotifications} style={{ position: 'relative', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+            <BsBellFill size={20} color={notificationCount > 0 ? '#faff00' : '#444'} />
+            {notificationCount > 0 && (
+              <span className="bell-count">{notificationCount}</span>
+            )}
+          </div>
         )}
-
-        {isLoading && (
-          <button type="button" disabled className="app-header__login">
-            Signing in...
+        {user ? (
+          <div className="user-profile-trigger" onClick={onToggleProfile} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+            <img src={user.photoURL} alt="Avatar" className="header-avatar" />
+          </div>
+        ) : (
+          <button 
+            onClick={onLogin} 
+            disabled={isLoading}
+            className="btn-console-primary"
+          >
+            {isLoading ? 'Signing In...' : 'Sign In'}
           </button>
-        )}
-
-        {user && !isLoading && (
-          <>
-            <span className="app-header__user">{user.displayName}</span>
-            <button type="button" onClick={onLogout} className="app-header__logout">
-              Logout
-            </button>
-          </>
         )}
       </div>
     </header>
   );
-}
+};
 
 export default Header;

@@ -1,0 +1,30 @@
+:root {
+  /* Core Palette */
+  --bg-black: #000000;
+  --bg-dark: #0a0a0a;
+  --bg-row: #0d0d0d;
+  
+  /* Accents */
+  --accent-yellow: #faff00;
+  --accent-green: #22c55e;
+  --accent-red: #f43f5e;
+  
+  /* Text System - BRIGHTENED FOR VISIBILITY */
+  --text-primary: #ffffff;
+  --text-secondary: #cccccc; /* Brightened from #aaaaaa */
+  --text-muted: #999999;     /* Brightened from #777777 */
+  
+  /* Layout */
+  --border: #333333;
+  --header-height: 70px;
+  --alert-bar-height: 80px;
+  
+  /* Typography */
+  --font-main: 'Plus Jakarta Sans', sans-serif;
+  --font-mono: 'Roboto Mono', monospace;
+  
+  /* Shadows & Glows - POLISHED */
+  --shadow-glow: 0 0 20px rgba(250, 255, 0, 0.15);
+  --accent-glow: 0 0 15px rgba(250, 255, 0, 0.3);
+  --glass-bg: rgba(8, 8, 8, 0.95);
+}
